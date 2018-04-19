@@ -78,6 +78,8 @@ void init_lru(int assoc_index, int block_index)
               if we == WRITE, then data used to
               update Cache/DRAM
 */
+
+/*Bit masking function*/
 unsigned createMask(unsigned a, unsigned b){
    unsigned r = 0; 
    for(unsigned i = a; i <= b; i++){
@@ -85,41 +87,61 @@ unsigned createMask(unsigned a, unsigned b){
    }
    return r; 
 }
+
+/*A data structure to hold the values of the tag, index, and offset*/
 typedef struct{
  	unsigned tagAddress; 
  	unsigned indexAddress; 
  	unsigned offsetAddress; 
 } TIO;
+
+/*Calculates the bit length of the tag*/
 int getTagSize(const int* indexBits, const int* offsetBits){
 	return 32 - *indexBits - *offsetBits;
 }
+
+/*Calculates the index length of the index*/
 int getIndexSize(){
 	/*Based on the number of sets, returns the number of bits that can represent that value*/
+	//Keep in mind of the zero index
 	if(set_count == 1){
-		return 0;
+		//2^0 = 1, 0 bit representation
+		//Value 1 is represented by "0" bits (0)
+		return 0; 
 	}
 	if(set_count == 2){
-		//is it 1 bit
+		//2^1 = 2, 1 bit representation
+		//Value 2 is represented by "1" bits (0 or 1)
 		return 1; 
 	}
-	if(set_count == 3){
-		//this is corrrect
-		return 2; 
+	if(set_count > 2 && set_count <= 4){
+		//2^2 = 4, 2 bit represenation
+		//Value 0-3 < 4 and is represented by 2 bits also
+		return 2;
 	}
-	if(set_count == 4){
-		return 2; 
-	}
-	if(set_count == 5){
+	if(set_count > 4 && set_count <= 8){
+		//2^3 = 8, 3 bit representation
+		//Value 0-7 < 8 and is represented by 3 bits also
 		return 3; 
 	}
+	if(set_count > 8 && set_count <= 16){
+		//2^4 = 16, 4 bit representation
+		//Values 0-15 < 16 and is represnted by 4 bits also
+		return 4; 
+	}
 	else{
+		
 		return 0; 
 	}
 	/* need to verify logic with Daneil*/
 }
+
+/*Calculates the bit length of the offset*/
 int getOffsetSize(){
 	return uint_log2(block_size);
 }
+
+/*This funciton is responsible for finding the values of the tag, index, and offset*/
 TIO getTIO(address addr){
 	TIO t; 
 
