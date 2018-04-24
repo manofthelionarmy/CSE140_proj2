@@ -79,6 +79,8 @@ void init_lru(int assoc_index, int block_index)
               update Cache/DRAM
 */
 
+
+//typedef unsigned int label; 
 /*Bit masking function*/
 unsigned createMask(unsigned a, unsigned b){
    unsigned r = 0; 
@@ -104,41 +106,26 @@ int getTagSize(const int* indexBits, const int* offsetBits){
 int getIndexSize(){
 	/*Based on the number of sets, returns the number of bits that can represent that value*/
 	//Keep in mind of the zero index
-	if(set_count == 1){
-		//2^0 = 1, 0 bit representation
-		//Value 1 is represented by "0" bits (0)
-		return 0; 
-	}
-	if(set_count == 2){
-		//2^1 = 2, 1 bit representation
-		//Value 2 is represented by "1" bits (0 or 1)
-		return 1; 
-	}
-	if(set_count > 2 && set_count <= 4){
-		//2^2 = 4, 2 bit represenation
-		//Value 0-3 < 4 and is represented by 2 bits also
-		return 2;
-	}
-	if(set_count > 4 && set_count <= 8){
-		//2^3 = 8, 3 bit representation
-		//Value 0-7 < 8 and is represented by 3 bits also
-		return 3; 
-	}
-	if(set_count > 8 && set_count <= 16){
-		//2^4 = 16, 4 bit representation
-		//Values 0-15 < 16 and is represnted by 4 bits also
-		return 4; 
-	}
-	else{
-		
-		return 0; 
-	}
-	/* need to verify logic with Daneil*/
+	return uint_log2(set_count);
 }
 
 /*Calculates the bit length of the offset*/
 int getOffsetSize(){
 	return uint_log2(block_size);
+}
+unsigned int getByte_size(unsigned int b){
+	if(b == 4){
+		return 2; 
+	}
+	if(b == 8){
+		return 3; 
+	}
+	if(b == 16){
+		return 4; 
+	}
+	if(b == 32){
+		return 5; 
+	}
 }
 
 /*This funciton is responsible for finding the values of the tag, index, and offset*/
@@ -157,9 +144,9 @@ TIO getTIO(address addr){
 	t.tagAddress = t.tagAddress & addr; 
 	t.tagAddress = t.tagAddress >> (indexBits + offsetBits);
 
-	t.indexAddress = createMask(indexBits - 1, (indexBits + offsetBits) -1);
+	t.indexAddress = createMask(offsetBits, (indexBits + offsetBits) -1);
 	t.indexAddress = t.indexAddress & addr; 
-	t.indexAddress = t.indexAddress >> (indexBits -1);
+	t.indexAddress = t.indexAddress >> (indexBits + offsetBits) -1;
 
 	t.offsetAddress = createMask(0, offsetBits - 1);
 	t.offsetAddress = t.offsetAddress & addr; 
@@ -167,24 +154,156 @@ TIO getTIO(address addr){
 	return t; 
 }
 
-void handleSetAssociativity1(address addr, word* data, WriteEnable we){
-	//The point of this is once the set is accessed, find the block containing the same tag
-	//Index address refers to which set 
-	TIO t = getTIO(addr);
+void handleRead(address addr, word* data, TIO t){
+
+	unsigned int lru_index = 0; 
+	unsigned int lru_value = 0; 
+	address oldAddress = 0; 
+
+	TransferUnit byte_size = 0; 
+
+  	byte_size = getByte_size(block_size);
+
+	CacheAction label = MISS; 
+	for(int i = 0; i < assoc; ++i){
+		if(t.tagAddress == cache[t.indexAddress].block[i].tag && cache[t.indexAddress].block[i].valid == 1){
+			label = HIT; 
+			cache[t.indexAddress].block[i].lru.value = 0; 
+			cache[t.indexAddress].block[i].valid = 1; 
+			//Read from cache to memory!! (4 bytes = 1 word)
+			memcpy(data, (cache[t.indexAddress].block[i].data + t.offsetAddress), 4);
+			return; 
+		}
+	}
+
+	if(label == MISS){
+
+		//Finds the LRU block
+		if(policy == LRU){
+			for(int i = 0; i < assoc; ++i){
+				if(lru_value < cache[t.indexAddress].block[i].lru.value){
+					lru_index = i; 
+					lru_value = cache[t.indexAddress].block[i].lru.value; 
+				}
+				
+			}
+		}
+		if(policy == RANDOM){
+			//Selects the block we wish to replace randomly
+			lru_index = randomint(assoc);
+		}
+		if(cache[t.indexAddress].block[lru_index].dirty == DIRTY){
+			unsigned int indexLength = getIndexSize();
+			unsigned int offsetLength = getOffsetSize();
+
+			oldAddress = cache[t.indexAddress].block[lru_index].tag << (indexLength + offsetLength) + (t.indexAddress << offsetLength);
+			accessDRAM(oldAddress, (cache[t.indexAddress].block[lru_index].data), byte_size, WRITE);
+		}
+
+		accessDRAM(addr, (cache[t.indexAddress].block[lru_index].data), byte_size, READ);
+		cache[t.indexAddress].block[lru_index].lru.value = 0; 
+		cache[t.indexAddress].block[lru_index].valid = 1; 
+		cache[t.indexAddress].block[lru_index].dirty = VIRGIN;
+		cache[t.indexAddress].block[lru_index].tag = t.tagAddress; 
+
+		memcpy(data, (cache[t.indexAddress].block[lru_index].data + t.offsetAddress), 4);
+	}
 
 }
-void handleSetAssociativity2(address addr, word* data, WriteEnable we){
+void handleWriteBack(address addr, word* data, TIO t){
+
+	CacheAction label = MISS; 
+	unsigned int lru_index = 0; 
+	unsigned int lru_value = 0; 
+	unsigned int indexLength = 0; 
+	unsigned int offsetLength = 0; 
+	TransferUnit byte_size= 0; 
+	address oldAddress = 0; 
+	byte_size = getByte_size(block_size);
+	for(int i = 0; i < assoc; ++i){
+		if(t.tagAddress == cache[t.indexAddress].block[i].tag && cache[t.indexAddress].block[i].valid == 1){
+			memcpy((cache[t.indexAddress].block[i].data + t.offsetAddress), data, 4);
+			cache[t.indexAddress].block[i].dirty = DIRTY; 
+			cache[t.indexAddress].block[i].lru.value = 0; 
+			cache[t.indexAddress].block[i].valid = 1; 
+			label = HIT; 
+		}
+	}
+
+	if(label == MISS){
+		if(policy  == LRU){
+			for(int i = 0; i < assoc; i++){
+				if(lru_value < cache[t.indexAddress].block[i].lru.value){
+					lru_index = i; 
+					lru_value = cache[t.indexAddress].block[i].lru.value; 
+				}
+			}
+		}
+		if(policy == RANDOM){
+			lru_index = randomint(assoc);
+		}
+		if(cache[t.indexAddress].block[lru_index].dirty == DIRTY){
+			indexLength = getIndexSize();
+			offsetLength = getOffsetSize();
+			oldAddress = cache[t.indexAddress].block[lru_index].tag << (indexLength + offsetLength) + (t.indexAddress << offsetLength); 
+			accessDRAM(oldAddress, (cache[t.indexAddress].block[lru_index].data), byte_size, WRITE);
+
+		}
+
+		cache[t.indexAddress].block[lru_index].lru.value = 0; 
+		cache[t.indexAddress].block[lru_index].valid = 1; 
+		cache[t.indexAddress].block[lru_index].dirty = DIRTY; 
+		cache[t.indexAddress].block[lru_index].tag = t.tagAddress; 
+
+		accessDRAM(addr, (cache[t.indexAddress].block[lru_index].data), byte_size, READ);
+		memcpy((cache[t.indexAddress].block[lru_index].data + t.offsetAddress), data, 4);
+	}
 
 }
-void handleSetAssociativity3(address addr, word* data, WriteEnable we){
+void handleWriteThrough(address addr, word* data, TIO t){
+	CacheAction label = MISS; 
+	unsigned int lru_index = 0; 
+	unsigned int lru_value = 0; 
+	unsigned int indexLength = 0; 
+	unsigned int offsetLength = 0; 
+	TransferUnit byte_size= 0; 
+	address oldAddress = 0; 
 
-}
-void handleSetAssociativity4(address addr, word* data, WriteEnable we){
+	for(int i = 0; i < assoc; ++i){
+		if(t.tagAddress == cache[t.indexAddress].block[i].tag && cache[t.indexAddress].block[i].valid == 1){
+			memcpy((cache[t.indexAddress].block[i].data + t.offsetAddress), data, 4);
+			cache[t.indexAddress].block[i].dirty = VIRGIN; 
+			cache[t.indexAddress].block[i].lru.value = 0; 
+			cache[t.indexAddress].block[i].valid = 1; 
+			label = HIT; 
+			accessDRAM(addr, (cache[t.indexAddress].block[i].data), byte_size, WRITE);
+		}
+	}
+	if(label == MISS){
+		if(policy  == LRU){
+			for(int i = 0; i < assoc; i++){
+				if(lru_value < cache[t.indexAddress].block[i].lru.value){
+					lru_index = i; 
+					lru_value = cache[t.indexAddress].block[i].lru.value; 
+				}
+			}
+		}
+		if(policy == RANDOM){
+			lru_index = randomint(assoc);
+		}
 
-}
-void handleSetAssociativity5(address addr, word* data, WriteEnable we){
+		accessDRAM(addr, (cache[t.indexAddress].block[lru_index].data), byte_size, READ);
+		cache[t.indexAddress].block[lru_index].lru.value = 0; 
+		cache[t.indexAddress].block[lru_index].valid = 1; 
+		cache[t.indexAddress].block[lru_index].dirty = VIRGIN; 
+		cache[t.indexAddress].block[lru_index].tag = t.tagAddress; 
 
+		memcpy((cache[t.indexAddress].block[lru_index].data + t.offsetAddress), data, 4);
+
+
+	}
 }
+
 void accessMemory(address addr, word* data, WriteEnable we)
 {
   /* Declare variables here */
@@ -193,8 +312,8 @@ void accessMemory(address addr, word* data, WriteEnable we)
   if(assoc == 0) {
     accessDRAM(addr, (byte*)data, WORD_SIZE, we);
     return;
-  }
-
+  } 
+  
   /*
   You need to read/write between memory (via the accessDRAM() function) and
   the cache (via the cache[] global structure defined in tips.h)
@@ -230,25 +349,27 @@ void accessMemory(address addr, word* data, WriteEnable we)
      At some point, ONCE YOU HAVE MORE OF YOUR CACHELOGIC IN PLACE,
      THIS LINE SHOULD BE REMOVED.
   */
-  else if(assoc == 1){
-  	handleSetAssociativity1(addr, data, we);
+  
+  TIO t = getTIO(addr);
+  //Increments the LRU values. 
+  if(policy == LRU){
+  	for(int i = 0; i < assoc; ++i){
+  		cache[t.indexAddress].block[i].lru.value++;
+  	}
+  }
+  if(we == READ){
+  	handleRead(addr, data, t);
   	return; 
   }
-  else if(assoc == 2){
-  	handleSetAssociativity2(addr, data, we);
-  	return;
-  }
-  else if(assoc == 3){
-  	handleSetAssociativity3(addr, data, we);
+  if(memory_sync_policy == WRITE_BACK){
+  	handleWriteBack(addr, data, t);
   	return; 
   }
-  else if(assoc == 4){
-  	handleSetAssociativity4(addr, data, we);
+  if(memory_sync_policy == WRITE_THROUGH){
+  	handleWriteThrough(addr, data, t);
   	return; 
   }
-  else if(assoc == 5){
-  	handleSetAssociativity5(addr, data, we);
-  	return; 
-  }
-  accessDRAM(addr, (byte*)data, WORD_SIZE, we);
+
+ 
+
 }
