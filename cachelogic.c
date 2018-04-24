@@ -170,6 +170,7 @@ void handleRead(address addr, word* data, TIO t){
 			label = HIT; 
 			cache[t.indexAddress].block[i].lru.value = 0; 
 			cache[t.indexAddress].block[i].valid = 1; 
+			cache[t.indexAddress].block[i].accessCount++; 
 			//Read from cache to memory!! (4 bytes = 1 word)
 			memcpy(data, (cache[t.indexAddress].block[i].data + t.offsetAddress), 4);
 			return; 
@@ -192,6 +193,18 @@ void handleRead(address addr, word* data, TIO t){
 			//Selects the block we wish to replace randomly
 			lru_index = randomint(assoc);
 		}
+		if(policy == LFU){
+			unsigned int lfu_value = 0; 
+			unsigned int lfu_index = 0; 
+
+			for(int i = 0; i < assoc; ++i){
+				if(lfu_value < cache[t.indexAddress].block[i].accessCount){
+					lfu_value = cache[t.indexAddress].block[i].accessCount; 
+					lfu_index = i; 
+				}
+			}
+			lru_index = lfu_index; 
+		}
 		if(cache[t.indexAddress].block[lru_index].dirty == DIRTY){
 			unsigned int indexLength = getIndexSize();
 			unsigned int offsetLength = getOffsetSize();
@@ -205,8 +218,11 @@ void handleRead(address addr, word* data, TIO t){
 		cache[t.indexAddress].block[lru_index].valid = 1; 
 		cache[t.indexAddress].block[lru_index].dirty = VIRGIN;
 		cache[t.indexAddress].block[lru_index].tag = t.tagAddress; 
+		cache[t.indexAddress].block[lru_index].accessCount = 1; 
 
 		memcpy(data, (cache[t.indexAddress].block[lru_index].data + t.offsetAddress), 4);
+
+		return; 
 	}
 
 }
@@ -226,7 +242,9 @@ void handleWriteBack(address addr, word* data, TIO t){
 			cache[t.indexAddress].block[i].dirty = DIRTY; 
 			cache[t.indexAddress].block[i].lru.value = 0; 
 			cache[t.indexAddress].block[i].valid = 1; 
+			cache[t.indexAddress].block[i].accessCount++;
 			label = HIT; 
+			return; 
 		}
 	}
 
@@ -238,6 +256,18 @@ void handleWriteBack(address addr, word* data, TIO t){
 					lru_value = cache[t.indexAddress].block[i].lru.value; 
 				}
 			}
+		}
+		if(policy == LFU){
+			unsigned int lfu_value = 0; 
+			unsigned int lfu_index = 0; 
+
+			for(int i = 0; i < assoc; ++i){
+				if(lfu_value < cache[t.indexAddress].block[i].accessCount){
+					lfu_value = cache[t.indexAddress].block[i].accessCount; 
+					lfu_index = i; 
+				}
+			}
+			lru_index = lfu_index; 
 		}
 		if(policy == RANDOM){
 			lru_index = randomint(assoc);
@@ -254,9 +284,11 @@ void handleWriteBack(address addr, word* data, TIO t){
 		cache[t.indexAddress].block[lru_index].valid = 1; 
 		cache[t.indexAddress].block[lru_index].dirty = DIRTY; 
 		cache[t.indexAddress].block[lru_index].tag = t.tagAddress; 
+		cache[t.indexAddress].block[lru_index].accessCount = 1; 
 
 		accessDRAM(addr, (cache[t.indexAddress].block[lru_index].data), byte_size, READ);
 		memcpy((cache[t.indexAddress].block[lru_index].data + t.offsetAddress), data, 4);
+		return; 
 	}
 
 }
@@ -276,7 +308,9 @@ void handleWriteThrough(address addr, word* data, TIO t){
 			cache[t.indexAddress].block[i].lru.value = 0; 
 			cache[t.indexAddress].block[i].valid = 1; 
 			label = HIT; 
+			cache[t.indexAddress].block[i].accessCount++;
 			accessDRAM(addr, (cache[t.indexAddress].block[i].data), byte_size, WRITE);
+			return; 
 		}
 	}
 	if(label == MISS){
@@ -291,16 +325,29 @@ void handleWriteThrough(address addr, word* data, TIO t){
 		if(policy == RANDOM){
 			lru_index = randomint(assoc);
 		}
+		if(policy == LFU){
+			unsigned int lfu_value = 0; 
+			unsigned int lfu_index = 0; 
+
+			for(int i = 0; i < assoc; ++i){
+				if(lfu_value < cache[t.indexAddress].block[i].accessCount){
+					lfu_value = cache[t.indexAddress].block[i].accessCount; 
+					lfu_index = i; 
+				}
+			}
+			lru_index = lfu_index; 
+		}
 
 		accessDRAM(addr, (cache[t.indexAddress].block[lru_index].data), byte_size, READ);
 		cache[t.indexAddress].block[lru_index].lru.value = 0; 
 		cache[t.indexAddress].block[lru_index].valid = 1; 
 		cache[t.indexAddress].block[lru_index].dirty = VIRGIN; 
 		cache[t.indexAddress].block[lru_index].tag = t.tagAddress; 
+		cache[t.indexAddress].block[lru_index].accessCount = 1; 
 
 		memcpy((cache[t.indexAddress].block[lru_index].data + t.offsetAddress), data, 4);
 
-
+		return; 
 	}
 }
 
@@ -355,6 +402,11 @@ void accessMemory(address addr, word* data, WriteEnable we)
   if(policy == LRU){
   	for(int i = 0; i < assoc; ++i){
   		cache[t.indexAddress].block[i].lru.value++;
+  	}
+  }
+  if(policy == LFU){
+  	for(int i = 0; i < assoc; ++i){
+  		cache[t.indexAddress].block[i].accessCount++;
   	}
   }
   if(we == READ){
